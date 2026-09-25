@@ -27,8 +27,9 @@ def generate_storyboard(prompt: str) -> dict:
         "2) 'search_query': a 1-to-2 word term to fetch NASA images (e.g., 'Jupiter', 'Supernova', 'Earth', 'Nebula')."
     )
 
+    # Use the stable production flash model
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-1.5-flash",
         contents=f"Topic: {prompt}",
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
@@ -156,4 +157,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-  
+    
