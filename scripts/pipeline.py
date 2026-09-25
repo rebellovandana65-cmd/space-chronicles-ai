@@ -7,8 +7,6 @@ import requests
 from pathlib import Path
 from mutagen.mp3 import MP3
 import edge_tts
-from google import genai
-from google.genai import types
 
 WORKSPACE = Path("output")
 WORKSPACE.mkdir(exist_ok=True)
@@ -17,46 +15,71 @@ CLIPS_DIR.mkdir(exist_ok=True)
 
 def generate_storyboard(prompt: str) -> dict:
     print(f"[*] Planning script for: '{prompt}'...")
-    client = genai.Client()
-
-    system_instruction = (
-        "You are an elite science documentary writer. "
-        "Create an engaging 'What If' space script broken into 4 to 6 scenes. "
-        "For each scene provide: "
-        "1) 'narration': 2 to 3 sentences of dramatic commentary. "
-        "2) 'search_query': a 1-to-2 word term to fetch NASA images (e.g., 'Jupiter', 'Supernova', 'Earth', 'Nebula')."
-    )
-
-    # Use the stable production flash model
-    response = client.models.generate_content(
-        model="gemini-1.5-flash",
-        contents=f"Topic: {prompt}",
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            response_mime_type="application/json",
-            response_schema={
-                "type": "OBJECT",
-                "properties": {
-                    "title": {"type": "STRING"},
-                    "scenes": {
-                        "type": "ARRAY",
-                        "items": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "scene_id": {"type": "INTEGER"},
-                                "narration": {"type": "STRING"},
-                                "search_query": {"type": "STRING"}
-                            },
-                            "required": ["scene_id", "narration", "search_query"]
-                        }
-                    }
-                },
-                "required": ["title", "scenes"]
-            },
-            temperature=0.7
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    
+    # Try models in order: 2.0-flash, 1.5-flash
+    for model_name in ["gemini-2.0-flash", "gemini-1.5-flash"]:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        headers = {"Content-Type": "application/json"}
+        
+        prompt_instruction = (
+            f"You are a science documentary director. Write an engaging 4-scene 'What If' space script for: '{prompt}'.\n"
+            "Return ONLY raw JSON (no markdown formatting, no ```json tags) with this exact schema:\n"
+            "{\n"
+            '  "title": "Video Title",\n'
+            '  "scenes": [\n'
+            '    {"scene_id": 1, "narration": "2 sentences describing the event.", "search_query": "Black Hole"},\n'
+            '    {"scene_id": 2, "narration": "2 sentences describing consequences.", "search_query": "Jupiter"},\n'
+            '    {"scene_id": 3, "narration": "2 sentences on cosmic impact.", "search_query": "Supernova"},\n'
+            '    {"scene_id": 4, "narration": "2 concluding sentences.", "search_query": "Earth"}\n'
+            "  ]\n"
+            "}"
         )
-    )
-    return json.loads(response.text)
+        
+        payload = {
+            "contents": [{"parts": [{"text": prompt_instruction}]}],
+            "generationConfig": {"temperature": 0.7}
+        }
+        
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=20)
+            if res.status_code == 200:
+                raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if raw_text.startswith("```"):
+                    raw_text = raw_text.split("\n", 1)[-1].rsplit("\n", 1)[0]
+                return json.loads(raw_text)
+            else:
+                print(f"[!] {model_name} returned status {res.status_code}: {res.text[:150]}")
+        except Exception as e:
+            print(f"[!] Error calling {model_name}: {e}")
+
+    # Built-in fallback so the pipeline never crashes
+    print("[*] Using fallback space documentary script...")
+    return {
+        "title": prompt,
+        "scenes": [
+            {
+                "scene_id": 1,
+                "narration": f"What would truly happen if {prompt.lower()}? Space is governed by unforgiving gravitational laws.",
+                "search_query": "Galaxy"
+            },
+            {
+                "scene_id": 2,
+                "narration": "Planetary orbits would destabilize rapidly as massive tidal forces warp the fabric of space-time.",
+                "search_query": "Black Hole"
+            },
+            {
+                "scene_id": 3,
+                "narration": "Extreme cosmic radiation would flood the inner system, ionizing atmospheres across surrounding worlds.",
+                "search_query": "Supernova"
+            },
+            {
+                "scene_id": 4,
+                "narration": "In the end, our solar system would be forever altered into an unrecognizable cosmic graveyard.",
+                "search_query": "Earth"
+            }
+        ]
+    }
 
 def fetch_nasa_image(query: str, scene_id: int) -> Path:
     dest_path = CLIPS_DIR / f"image_{scene_id:02d}.jpg"
@@ -75,10 +98,7 @@ def fetch_nasa_image(query: str, scene_id: int) -> Path:
         res = requests.get(url, timeout=15).json()
         items = res.get("collection", {}).get("items", [])
         
-        if not items:
-            return create_fallback()
-
-        for item in items[:3]:
+        for item in items[:5]:
             href = item.get("links", [{}])[0].get("href")
             if href:
                 img_data = requests.get(href, timeout=20).content
@@ -140,12 +160,14 @@ def concatenate_clips(clip_paths: list[Path], output_path: Path):
     subprocess.run(cmd, check=True)
 
 async def main():
-    prompt = sys.argv[1] if len(sys.argv) > 1 else "What if a black hole passed Earth?"
+    prompt = sys.argv[1] if len(sys.argv) > 1 else "What if a rogue black hole entered our solar system?"
     storyboard = generate_storyboard(prompt)
+    print(f"[*] Title: {storyboard['title']}")
     
     rendered_clips = []
     for scene in storyboard["scenes"]:
         s_id = scene["scene_id"]
+        print(f"[*] Building Scene {s_id}...")
         image_path = fetch_nasa_image(scene["search_query"], s_id)
         audio_path = await generate_narration(scene["narration"], s_id)
         clip_path = render_scene(image_path, audio_path, s_id)
