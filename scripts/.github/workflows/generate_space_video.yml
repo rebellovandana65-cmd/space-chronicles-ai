@@ -1,0 +1,48 @@
+name: Generate Space Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Video Topic'
+        required: true
+        default: 'What if a rogue black hole entered our solar system?'
+
+jobs:
+  build-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Packages
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Generator
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python scripts/pipeline.py "${{ github.event.inputs.prompt }}"
+
+      - name: Save Video File
+        uses: actions/upload-artifact@v4
+        with:
+          name: completed-space-video
+          path: output/final_space_video.mp4
+          retention-days: 7
+          
